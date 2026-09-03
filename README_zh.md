@@ -6,6 +6,7 @@ Pi Usage 是一个适用于 [Pi](https://github.com/earendil-works/pi-mono) 和 
 
 - 当前模型的简洁状态栏，例如：`Codex · 5h 92% · 7d 85%`。
 - 服务商公开提供的剩余额度、限流窗口和重置时间。
+- 生成时的实时输出速度（例如 `· ⇣42 tok/s`），每秒从内存中的会话用量采样一次——无额外网络或磁盘 IO，空闲时自动隐藏。
 - 通过 `/usage` 查看所有已配置服务商的详细信息。
 
 显示会随当前模型切换。请求失败时不会被错误显示为余额或额度为零。
@@ -97,6 +98,7 @@ pi update --extensions
 
 ```text
 /usage settings status on|off       # 底部状态栏，默认开启
+/usage settings rate on|off         # 状态栏实时 tok/s，默认开启，空闲时隐藏
 /usage settings widget on|off       # 详细小部件，默认关闭
 /usage settings interval <秒数>     # 刷新间隔，默认 120 秒
 /usage settings timeout <秒数>      # 请求超时，默认 10 秒

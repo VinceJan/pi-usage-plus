@@ -10,6 +10,7 @@ Forked from [@wayner6/pi-usage](https://github.com/wayner6/pi-usage) with expand
 
 - A compact status line for the active model, such as `Codex · 5h 92% · 7d 85%` or `Kimi · Balance ¥42.50`.
 - Remaining balance, rate-limit windows, and reset times when the provider exposes them.
+- Live output speed while generating (e.g. `· ⇣42 tok/s`), sampled once per second from in-memory session usage — no extra network or disk I/O, hidden when idle.
 - Details for every configured provider through `/usage`.
 
 The display follows the active model. It does not turn request failures into a zero balance.
@@ -95,6 +96,7 @@ Use `/usage settings` followed by one of these commands:
 
 ```text
 /usage settings status on|off       # status line; on by default
+/usage settings rate on|off         # live tok/s in the status line; on by default, hidden when idle
 /usage settings widget on|off       # detailed widget; off by default
 /usage settings interval <seconds>  # refresh interval; 120 by default
 /usage settings timeout <seconds>   # request timeout; 10 by default

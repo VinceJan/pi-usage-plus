@@ -3,6 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { loadConfig, type UsageConfig } from "./core/config.ts";
 import type { UsageSnapshot } from "./core/types.ts";
 import { ProviderUsageController } from "./modules/provider/controller.ts";
+import { formatRate, RateTracker } from "./modules/rate/tracker.ts";
 import { showDetails } from "./ui/details.ts";
 import { compactSnapshot, snapshotLines } from "./ui/format.ts";
 import { handleSettings } from "./settings.ts";
@@ -18,6 +19,10 @@ export default function (pi: ExtensionAPI) {
   let lastContext: ExtensionContext | undefined;
   let observedModelKey: string | undefined;
   let renderGeneration = 0;
+  let rateTimer: ReturnType<typeof setInterval> | undefined;
+  let rateText: string | undefined;
+  let lastSnapshot: UsageSnapshot | undefined;
+  const rateTracker = new RateTracker();
 
   function modelKey(model: Model<Api> | undefined): string | undefined {
     return model ? `${model.provider}/${model.id}/${model.baseUrl}` : undefined;
@@ -27,9 +32,22 @@ export default function (pi: ExtensionAPI) {
     return ctx.model;
   }
 
+  function statusText(current: UsageSnapshot | undefined): string {
+    const base = compactSnapshot(current);
+    return rateText && config.display.rate ? `${base} · ${rateText}` : base;
+  }
+
+  function renderRate(ctx: ExtensionContext): void {
+    // Rate-only refresh: status line only, never touches the widget.
+    if (!config.display.status) return;
+    const current = controller.currentView(ctx, lastSnapshot);
+    ctx.ui.setStatus(STATUS_ID, ctx.ui.theme.fg(current?.state === "ok" ? "success" : current?.state === "stale" ? "warning" : "dim", statusText(current)));
+  }
+
   function render(ctx: ExtensionContext, snapshot?: UsageSnapshot, model: Model<Api> | undefined = ctx.model): void {
     const current = controller.currentView(ctx, snapshot, model);
-    ctx.ui.setStatus(STATUS_ID, config.display.status ? ctx.ui.theme.fg(current?.state === "ok" ? "success" : current?.state === "stale" ? "warning" : "dim", compactSnapshot(current)) : undefined);
+    lastSnapshot = snapshot;
+    ctx.ui.setStatus(STATUS_ID, config.display.status ? ctx.ui.theme.fg(current?.state === "ok" ? "success" : current?.state === "stale" ? "warning" : "dim", statusText(current)) : undefined);
     ctx.ui.setWidget(WIDGET_ID, config.display.widget && current ? snapshotLines(current) : undefined, { placement: "belowEditor" });
   }
 
@@ -49,6 +67,57 @@ export default function (pi: ExtensionAPI) {
       if (generation === renderGeneration) render(ctx, fallback, model);
       return fallback;
     }
+  }
+
+  // Cumulative session output tokens from the public read-only session manager
+  // (the same source zentui aggregates for its footer). No disk or network I/O.
+  function sessionOutputTotal(ctx: ExtensionContext): number | undefined {
+    let entries: ReturnType<ExtensionContext["sessionManager"]["getEntries"]>;
+    try {
+      entries = ctx.sessionManager.getEntries();
+    } catch {
+      return undefined;
+    }
+    let total = 0;
+    let seen = false;
+    for (const entry of entries) {
+      if (entry.type !== "message") continue;
+      const message = entry.message;
+      if (message?.role !== "assistant") continue;
+      const output = message.usage?.output;
+      if (typeof output === "number" && Number.isFinite(output) && output > 0) {
+        total += output;
+        seen = true;
+      }
+    }
+    return seen ? total : undefined;
+  }
+
+  function stopRateSampler(renderAfter: ExtensionContext | undefined = lastContext): void {
+    if (rateTimer) clearInterval(rateTimer);
+    rateTimer = undefined;
+    rateTracker.reset();
+    if (rateText !== undefined) {
+      rateText = undefined;
+      if (renderAfter) render(renderAfter);
+    }
+  }
+
+  function startRateSampler(ctx: ExtensionContext): void {
+    stopRateSampler(undefined);
+    rateTracker.reset();
+    rateText = undefined;
+    lastContext = ctx;
+    rateTimer = setInterval(() => {
+      if (!lastContext || !config.display.rate) return;
+      const total = sessionOutputTotal(lastContext);
+      if (total === undefined) return;
+      const next = formatRate(rateTracker.sample(total));
+      if (next === rateText) return;
+      rateText = next;
+      renderRate(lastContext);
+    }, 1000);
+    rateTimer.unref?.();
   }
 
   function startTimer(ctx: ExtensionContext): void {
@@ -78,6 +147,7 @@ export default function (pi: ExtensionAPI) {
     if (action === "settings") {
       config = await handleSettings(rest.join(" "), ctx, config);
       controller.setConfig(config);
+      if (!config.display.rate) stopRateSampler(ctx);
       startTimer(ctx);
       await refreshCurrent(ctx);
       return;
@@ -119,10 +189,20 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     config = await loadConfig();
     controller = new ProviderUsageController(config);
+    stopRateSampler(undefined);
     startTimer(ctx);
     await refreshCurrent(ctx);
   });
 
+  pi.on("agent_start", (_event, ctx) => {
+    if (config.display.rate) startRateSampler(ctx);
+  });
+  pi.on("agent_end", (_event, ctx) => {
+    stopRateSampler(ctx);
+  });
+  pi.on("agent_settled", (_event, ctx) => {
+    stopRateSampler(ctx);
+  });
   pi.on("model_select", async (event, ctx) => {
     observedModelKey = modelKey(event.model);
     const cached = event.model ? controller.cache.values().find((item) => item.sourceProviderId === event.model.provider) : undefined;
@@ -130,6 +210,11 @@ export default function (pi: ExtensionAPI) {
     await refreshCurrent(ctx, false, event.model);
   });
   pi.on("session_shutdown", async () => {
+    if (rateTimer) clearInterval(rateTimer);
+    rateTimer = undefined;
+    rateText = undefined;
+    rateTracker.reset();
+    if (timer) clearInterval(timer);
     if (timer) clearInterval(timer);
     if (modelWatchTimer) clearInterval(modelWatchTimer);
     timer = undefined;

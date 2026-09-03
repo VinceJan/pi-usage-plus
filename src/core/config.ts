@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export interface UsageConfig {
-  display: { status: boolean; widget: boolean; detailsDefault: "all" | "current" };
+  display: { status: boolean; widget: boolean; detailsDefault: "all" | "current"; rate: boolean };
   refresh: { intervalSeconds: number; timeoutSeconds: number };
   adapters: {
     deepseek: { enabled: boolean };
@@ -21,7 +21,7 @@ export interface UsageConfig {
 }
 
 export const DEFAULT_CONFIG: UsageConfig = {
-  display: { status: true, widget: false, detailsDefault: "all" },
+  display: { status: true, widget: false, detailsDefault: "all", rate: true },
   refresh: { intervalSeconds: 120, timeoutSeconds: 10 },
   adapters: {
     deepseek: { enabled: true },
@@ -55,6 +55,7 @@ export async function loadConfig(): Promise<UsageConfig> {
         status: parsed.display?.status ?? DEFAULT_CONFIG.display.status,
         widget: parsed.display?.widget ?? DEFAULT_CONFIG.display.widget,
         detailsDefault: parsed.display?.detailsDefault === "current" ? "current" : "all",
+        rate: parsed.display?.rate ?? DEFAULT_CONFIG.display.rate,
       },
       refresh: {
         intervalSeconds: clamp(parsed.refresh?.intervalSeconds, 10, 86400, DEFAULT_CONFIG.refresh.intervalSeconds),
